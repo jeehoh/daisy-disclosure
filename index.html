@@ -1622,7 +1622,8 @@ input[type="text"]:focus, textarea:focus, select:focus{
   <aside class="right" aria-label="Generated statement">
 <fieldset class="statements-shell">
       <legend>Your AI Disclosure Statement</legend><div class="btns">
-      
+      <button type="button" class="secondary" id="copyShareLink" title="Copy a link that reopens this page with your current selections">Copy share link</button>
+
       
 
 
@@ -2237,10 +2238,101 @@ function generateAll() {
       URL.revokeObjectURL(url);
     }
 
-    
+    // Shareable URL state: selections are mirrored into the query string so co-authors
+    // can open the same link and see the same statement.
+    const URL_LEVEL_GROUPS = {
+      brain: 'lvl_brain', code: 'lvl_code', analysis: 'lvl_analysis',
+      draft: 'lvl_draft', fig: 'lvl_fig', edit: 'lvl_edit'
+    };
+    const URL_TEXT_FIELDS = {
+      tools: 'tools', data: 'dataShared', safeguards: 'safeguards',
+      validation: 'validation', boundaries: 'boundaries'
+    };
+
+    function stateToParams() {
+      const p = new URLSearchParams();
+      Object.entries(URL_LEVEL_GROUPS).forEach(([key, group]) => {
+        const sel = document.querySelector(`input[name="${group}"]:checked`);
+        if (!sel || sel.value === 'none') return;
+        p.set(key, sel.value);
+        // Only the hint of the selected level affects the statement
+        const span = sel.closest('label')?.querySelector('.edit-hint');
+        if (span && span.dataset.userEdited === 'true') {
+          const t = (span.textContent || '').trim();
+          if (t) p.set(key + '_note', t);
+        }
+      });
+      Object.entries(URL_TEXT_FIELDS).forEach(([key, id]) => {
+        const v = ($(id)?.value || '').trim();
+        if (v) p.set(key, v);
+      });
+      const finalEl = $('finalText');
+      if (finalEl && finalEl.dataset.edited === 'true' && finalEl.value.trim()) {
+        p.set('final', finalEl.value);
+      }
+      return p;
+    }
+
+    function shareUrl() {
+      const qs = stateToParams().toString();
+      return location.pathname + (qs ? '?' + qs : '') + location.hash;
+    }
+
+    function syncUrlFromState() {
+      try { history.replaceState(null, '', shareUrl()); } catch (e) {}
+    }
+
+    function restoreStateFromUrl() {
+      const p = new URLSearchParams(location.search);
+      if (![...p.keys()].length) return false;
+      Object.entries(URL_LEVEL_GROUPS).forEach(([key, group]) => {
+        const lvl = p.get(key);
+        if (!lvl) return;
+        const radio = document.querySelector(`input[name="${group}"][value="${CSS.escape(lvl)}"]`);
+        if (!radio) return;
+        radio.checked = true;
+        const note = p.get(key + '_note');
+        const span = radio.closest('label')?.querySelector('.edit-hint');
+        if (span && note) {
+          span.textContent = note;
+          span.classList.remove('is-placeholder');
+          span.classList.add('live-edited');
+          span.dataset.userEdited = 'true';
+        }
+      });
+      Object.entries(URL_TEXT_FIELDS).forEach(([key, id]) => {
+        const v = p.get(key);
+        if (v && $(id)) $(id).value = v;
+      });
+      const final = p.get('final');
+      const finalEl = $('finalText');
+      if (final && finalEl) {
+        finalEl.value = final;
+        finalEl.dataset.edited = 'true';
+      }
+      return true;
+    }
+
 document.addEventListener('DOMContentLoaded', () => {
   initEditHintPlaceholders();
+  restoreStateFromUrl();
   wireLiveUpdate();
+
+  // Keep the URL in sync with the current selections
+  const debouncedSyncUrl = debounce(syncUrlFromState, 300);
+  ['input', 'change'].forEach(evt => document.addEventListener(evt, debouncedSyncUrl, true));
+
+  const shareBtn = $('copyShareLink');
+  if (shareBtn) {
+    shareBtn.addEventListener('click', () => {
+      syncUrlFromState();
+      const label = shareBtn.textContent;
+      navigator.clipboard.writeText(location.href).then(
+        () => { shareBtn.textContent = 'Link copied'; },
+        () => { shareBtn.textContent = 'Copy failed'; }
+      ).finally(() => setTimeout(() => { shareBtn.textContent = label; }, 1500));
+    });
+  }
 
   // Debounced regeneration for bracket edits so typing feels smooth
   const debouncedRegenerate = debounce(() => {
